@@ -2,6 +2,8 @@ package s3
 
 import (
 	"fmt"
+	"github.com/aws/aws-sdk-go/service/resourcegroupstaggingapi"
+
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -126,18 +128,25 @@ func (s *Source) setMaxObjectSize(maxObjectSize int64) {
 	}
 }
 
-func (s *Source) newClient(region, roleArn string) (*s3.S3, error) {
+func (s *Source) newClient(region, roleArn string) (*s3.S3, *resourcegroupstaggingapi.ResourceGroupsTaggingAPI, error) {
 	cfg := aws.NewConfig()
 	cfg.CredentialsChainVerboseErrors = aws.Bool(true)
 	cfg.Region = aws.String(region)
 
+	cfgForTag := aws.NewConfig()
+	cfgForTag.CredentialsChainVerboseErrors = aws.Bool(true)
+	cfgForTag.Region = aws.String("ap-northeast-2")
+
 	switch cred := s.conn.GetCredential().(type) {
 	case *sourcespb.S3_SessionToken:
 		cfg.Credentials = credentials.NewStaticCredentials(cred.SessionToken.Key, cred.SessionToken.Secret, cred.SessionToken.SessionToken)
+		cfgForTag.Credentials = credentials.NewStaticCredentials(cred.SessionToken.Key, cred.SessionToken.Secret, cred.SessionToken.SessionToken)
 	case *sourcespb.S3_AccessKey:
 		cfg.Credentials = credentials.NewStaticCredentials(cred.AccessKey.Key, cred.AccessKey.Secret, "")
+		cfgForTag.Credentials = credentials.NewStaticCredentials(cred.AccessKey.Key, cred.AccessKey.Secret, "")
 	case *sourcespb.S3_Unauthenticated:
 		cfg.Credentials = credentials.AnonymousCredentials
+		cfgForTag.Credentials = credentials.AnonymousCredentials
 	default:
 		// In all other cases, the AWS SDK will follow its normal waterfall logic to pick up credentials (i.e. they can
 		// come from the environment or the credentials file or whatever else AWS gets up to).
@@ -146,13 +155,23 @@ func (s *Source) newClient(region, roleArn string) (*s3.S3, error) {
 	if roleArn != "" {
 		sess, err := session.NewSession(cfg)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		sessForTag, err := session.NewSession(cfgForTag)
+		if err != nil {
+			return nil, nil, err
 		}
 
 		stsClient := sts.New(sess)
 		cfg.Credentials = stscreds.NewCredentialsWithClient(stsClient, roleArn, func(p *stscreds.AssumeRoleProvider) {
 			p.RoleSessionName = "trufflehog"
 		})
+
+		stsClientForTag := sts.New(sessForTag)
+		cfgForTag.Credentials = stscreds.NewCredentialsWithClient(stsClientForTag, roleArn, func(p *stscreds.AssumeRoleProvider) {
+			p.RoleSessionName = "trufflehog"
+		})
+
 	}
 
 	sess, err := session.NewSessionWithOptions(session.Options{
@@ -160,26 +179,62 @@ func (s *Source) newClient(region, roleArn string) (*s3.S3, error) {
 		Config:            *cfg,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return s3.New(sess), nil
+	sessForTag, err := session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+		Config:            *cfgForTag,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return s3.New(sess), resourcegroupstaggingapi.New(sessForTag), nil
 }
 
 // IAM identity needs s3:ListBuckets permission
-func (s *Source) getBucketsToScan(client *s3.S3) ([]string, error) {
-	if len(s.conn.Buckets) > 0 {
-		return s.conn.Buckets, nil
+func (s *Source) getBucketsToScan(client *resourcegroupstaggingapi.ResourceGroupsTaggingAPI) ([]string, error) {
+	//if len(s.conn.Buckets) > 0 {
+	//	return s.conn.Buckets, nil
+	//}
+	//
+	//res, err := client.ListBuckets(&s3.ListBucketsInput{})
+	//if err != nil {
+	//	return nil, err
+	//}
+	//
+	//var bucketsToScan []string
+	//for _, bucket := range res.Buckets {
+	//	bucketsToScan = append(bucketsToScan, *bucket.Name)
+	//}
+	//return bucketsToScan, nil
+	params := &resourcegroupstaggingapi.GetResourcesInput{
+		ResourceTypeFilters: []*string{aws.String("s3")},
+		TagFilters: []*resourcegroupstaggingapi.TagFilter{
+			{
+				Key:    aws.String("trufflehog"),
+				Values: []*string{aws.String("true")},
+			},
+		},
+		ResourcesPerPage: aws.Int64(100),
 	}
-
-	res, err := client.ListBuckets(&s3.ListBucketsInput{})
-	if err != nil {
-		return nil, err
-	}
-
 	var bucketsToScan []string
-	for _, bucket := range res.Buckets {
-		bucketsToScan = append(bucketsToScan, *bucket.Name)
+	for {
+		resp, err := client.GetResources(params)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, resourceTagMapping := range resp.ResourceTagMappingList {
+			bucketsToScan = append(bucketsToScan, strings.Replace(*resourceTagMapping.ResourceARN, "arn:aws:s3:::", "", 1))
+		}
+
+		if resp.PaginationToken == nil || *resp.PaginationToken == "" {
+			break
+		}
+
+		params.PaginationToken = resp.PaginationToken
 	}
 	return bucketsToScan, nil
 }
@@ -252,7 +307,7 @@ func (s *Source) getRegionalClientForBucket(ctx context.Context, defaultRegionCl
 		return defaultRegionClient, nil
 	}
 
-	regionalClient, err := s.newClient(region, role)
+	regionalClient, _, err := s.newClient(region, role)
 	if err != nil {
 		return nil, errors.WrapPrefix(err, "could not create regional s3 client", 0)
 	}
@@ -464,12 +519,12 @@ func (s *Source) visitRoles(ctx context.Context, f func(c context.Context, defau
 	}
 
 	for _, role := range roles {
-		client, err := s.newClient(defaultAWSRegion, role)
+		client, tagClient, err := s.newClient(defaultAWSRegion, role)
 		if err != nil {
 			return errors.WrapPrefix(err, "could not create s3 client", 0)
 		}
 
-		bucketsToScan, err := s.getBucketsToScan(client)
+		bucketsToScan, err := s.getBucketsToScan(tagClient)
 		if err != nil {
 			return fmt.Errorf("role %q could not list any s3 buckets for scanning: %w", role, err)
 		}

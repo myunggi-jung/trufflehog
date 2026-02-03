@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
-	"github.com/aws/aws-lambda-go/lambda"
+	"net/http"
+	"strconv"
+
+	"encoding/json"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ssm"
 	slackMessage "github.com/slack-go/slack"
-	"strconv"
 
 	_ "net/http/pprof"
 	"os"
@@ -20,6 +24,9 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/jpillora/overseer"
 
+	"trufflehog/pkg/engine"
+	"trufflehog/pkg/output"
+
 	"github.com/trufflesecurity/trufflehog/v3/pkg/cleantemp"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/config"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/context"
@@ -28,8 +35,6 @@ import (
 	"github.com/trufflesecurity/trufflehog/v3/pkg/log"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/sources"
 	"github.com/trufflesecurity/trufflehog/v3/pkg/version"
-	"trufflehog/pkg/engine"
-	"trufflehog/pkg/output"
 )
 
 var (
@@ -84,33 +89,33 @@ func HandleRequest(event *MyEvent) (*string, error) {
 }
 
 func main() {
-	lambda.Start(HandleRequest)
-	//// setup logger
-	//logFormat := log.WithConsoleSink
-	//logger, sync := log.New("trufflehog", logFormat(os.Stderr))
-	//
-	//// make it the default logger for contexts
-	//context.SetDefaultLogger(logger)
-	//
-	//if os.Getenv("local") == "true" {
-	//	run(overseer.State{})
-	//	os.Exit(0)
-	//}
-	//
-	//defer func() { _ = sync() }()
-	//logFatal := logFatalFunc(logger)
-	//
-	//updateCfg := overseer.Config{
-	//	Program:       run,
-	//	Debug:         false,
-	//	RestartSignal: syscall.SIGTERM,
-	//	// TODO: Eventually add a PreUpgrade func for signature check w/ x509 PKCS1v15
-	//	// PreUpgrade: checkUpdateSignature(binaryPath string),
-	//}
-	//err := overseer.RunErr(updateCfg)
-	//if err != nil {
-	//	logFatal(err, "error occurred with trufflehog updater 🐷")
-	//}
+	//lambda.Start(HandleRequest)
+	// setup logger
+	logFormat := log.WithConsoleSink
+	logger, sync := log.New("trufflehog", logFormat(os.Stderr))
+
+	// make it the default logger for contexts
+	context.SetDefaultLogger(logger)
+
+	if os.Getenv("local") == "true" {
+		run(overseer.State{})
+		os.Exit(0)
+	}
+
+	defer func() { _ = sync() }()
+	logFatal := logFatalFunc(logger)
+
+	updateCfg := overseer.Config{
+		Program:       run,
+		Debug:         false,
+		RestartSignal: syscall.SIGTERM,
+		// TODO: Eventually add a PreUpgrade func for signature check w/ x509 PKCS1v15
+		// PreUpgrade: checkUpdateSignature(binaryPath string),
+	}
+	err := overseer.RunErr(updateCfg)
+	if err != nil {
+		logFatal(err, "error occurred with trufflehog updater 🐷")
+	}
 }
 
 func run(state overseer.State) {
@@ -243,7 +248,8 @@ func run(state overseer.State) {
 	s3ScanSessionToken = os.Getenv("AWS_SESSION_TOKEN")
 	roleArns = os.Getenv("AWS_ROLE_ARNS")
 	s3ScanRoleArns = strings.Split(roleArns, ",")
-	url := getSlackWebhook(s3ScanKey, s3ScanSecret, s3ScanSessionToken)
+	slackUrl := getSlackWebhook(s3ScanKey, s3ScanSecret, s3ScanSessionToken)
+	teamsUrl := getTeamsWebhook(s3ScanKey, s3ScanSecret, s3ScanSessionToken)
 
 	fmt.Fprintf(os.Stderr, "🐷🔑🐷  TruffleHog. Unearth your secrets. 🐷🔑🐷\n\n")
 	//sendSlackMessage(url, "TruffleHog. Unearth your secrets.")
@@ -296,8 +302,9 @@ func run(state overseer.State) {
 	)
 
 	//slack message
-	sendSlackMessage(url, fmt.Sprintf("finished scanning \tchunks: %d, bytes: %d, verified_secrets: %d, unverified_secrets: %d, scan_duration: %s", metrics.ChunksScanned, metrics.BytesScanned, metrics.VerifiedSecretsFound, metrics.UnverifiedSecretsFound, metrics.ScanDuration.String()))
-
+	sendSlackMessage(slackUrl, fmt.Sprintf("finished scanning \tchunks: %d, bytes: %d, verified_secrets: %d, unverified_secrets: %d, scan_duration: %s", metrics.ChunksScanned, metrics.BytesScanned, metrics.VerifiedSecretsFound, metrics.UnverifiedSecretsFound, metrics.ScanDuration.String()))
+	//teams message
+	sendTeamsMessage(teamsUrl, "S3 secret scanning result", fmt.Sprintf("finished scanning \tchunks: %d, bytes: %d, verified_secrets: %d, unverified_secrets: %d, scan_duration: %s", metrics.ChunksScanned, metrics.BytesScanned, metrics.VerifiedSecretsFound, metrics.UnverifiedSecretsFound, metrics.ScanDuration.String()))
 }
 
 func getSlackWebhook(key string, secret string, token string) string {
@@ -328,6 +335,34 @@ func getSlackWebhook(key string, secret string, token string) string {
 	return *result.Parameter.Value
 }
 
+func getTeamsWebhook(key string, secret string, token string) string {
+	cfg := aws.NewConfig()
+	cfg.Credentials = credentials.NewStaticCredentials(key, secret, token)
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String("ap-northeast-2")},
+	)
+	if err != nil {
+		fmt.Println("Error creating AWS session:", err)
+	}
+
+	svc := ssm.New(sess)
+
+	paramName := os.Getenv("SLACK_INFO")
+	if paramName == "" {
+		paramName = "/trufflehog/teams_url"
+	}
+
+	result, err := svc.GetParameter(&ssm.GetParameterInput{
+		Name:           &paramName,
+		WithDecryption: aws.Bool(true),
+	})
+	if err != nil {
+		fmt.Println("Error getting parameter:", err)
+	}
+
+	return *result.Parameter.Value
+}
+
 func sendSlackMessage(url string, message string) {
 	msg := slackMessage.WebhookMessage{
 		Text: message,
@@ -337,6 +372,33 @@ func sendSlackMessage(url string, message string) {
 	if err != nil {
 		fmt.Printf("Error sending slack message: %v\n", err)
 	}
+}
+
+func sendTeamsMessage(url string, title, text string) {
+	payload := map[string]interface{}{
+		"type": "message",
+		"attachments": []map[string]interface{}{
+			{
+				"contentType": "application/vnd.microsoft.card.adaptive",
+				"content": map[string]interface{}{
+					"type": "AdaptiveCard",
+					"body": []map[string]interface{}{
+						{"type": "TextBlock", "size": "Medium", "weight": "Bolder", "text": title},
+						{"type": "TextBlock", "text": text, "wrap": true},
+					},
+					"$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+					"version": "1.2",
+				},
+			},
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		fmt.Printf("Error sending teams message: %v\n", err)
+	}
+	defer resp.Body.Close()
 }
 
 // logFatalFunc returns a log.Fatal style function. Calling the returned

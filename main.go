@@ -348,9 +348,9 @@ func getTeamsWebhook(key string, secret string, token string) string {
 
 	svc := ssm.New(sess)
 
-	paramName := os.Getenv("SLACK_INFO")
+	paramName := os.Getenv("TEAMS_INFO")
 	if paramName == "" {
-		paramName = "/trufflehog/teams_url"
+		paramName = "/security/teams_url"
 	}
 
 	result, err := svc.GetParameter(&ssm.GetParameterInput{

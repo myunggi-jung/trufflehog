@@ -8,6 +8,7 @@ import (
 
 	"encoding/json"
 
+	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -89,33 +90,33 @@ func HandleRequest(event *MyEvent) (*string, error) {
 }
 
 func main() {
-	//lambda.Start(HandleRequest)
-	// setup logger
-	logFormat := log.WithConsoleSink
-	logger, sync := log.New("trufflehog", logFormat(os.Stderr))
-
-	// make it the default logger for contexts
-	context.SetDefaultLogger(logger)
-
-	if os.Getenv("local") == "true" {
-		run(overseer.State{})
-		os.Exit(0)
-	}
-
-	defer func() { _ = sync() }()
-	logFatal := logFatalFunc(logger)
-
-	updateCfg := overseer.Config{
-		Program:       run,
-		Debug:         false,
-		RestartSignal: syscall.SIGTERM,
-		// TODO: Eventually add a PreUpgrade func for signature check w/ x509 PKCS1v15
-		// PreUpgrade: checkUpdateSignature(binaryPath string),
-	}
-	err := overseer.RunErr(updateCfg)
-	if err != nil {
-		logFatal(err, "error occurred with trufflehog updater 🐷")
-	}
+	lambda.Start(HandleRequest)
+	//// setup logger
+	//logFormat := log.WithConsoleSink
+	//logger, sync := log.New("trufflehog", logFormat(os.Stderr))
+	//
+	//// make it the default logger for contexts
+	//context.SetDefaultLogger(logger)
+	//
+	//if os.Getenv("local") == "true" {
+	//	run(overseer.State{})
+	//	os.Exit(0)
+	//}
+	//
+	//defer func() { _ = sync() }()
+	//logFatal := logFatalFunc(logger)
+	//
+	//updateCfg := overseer.Config{
+	//	Program:       run,
+	//	Debug:         false,
+	//	RestartSignal: syscall.SIGTERM,
+	//	// TODO: Eventually add a PreUpgrade func for signature check w/ x509 PKCS1v15
+	//	// PreUpgrade: checkUpdateSignature(binaryPath string),
+	//}
+	//err := overseer.RunErr(updateCfg)
+	//if err != nil {
+	//	logFatal(err, "error occurred with trufflehog updater 🐷")
+	//}
 }
 
 func run(state overseer.State) {

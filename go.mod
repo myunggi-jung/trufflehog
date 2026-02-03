@@ -10,6 +10,7 @@ require (
 	github.com/BobuSumisu/aho-corasick v1.0.3
 	github.com/TheZeroSlave/zapsentry v1.20.2
 	github.com/alecthomas/kingpin/v2 v2.4.0
+	github.com/aws/aws-lambda-go v1.52.0
 	github.com/aws/aws-sdk-go v1.50.20
 	github.com/aymanbagabas/go-osc52 v1.2.2
 	github.com/bill-rich/go-syslog v0.0.0-20220413021637-49edb52a574c
@@ -258,6 +259,7 @@ require (
 	go4.org v0.0.0-20200411211856-f5505b9728dd // indirect
 	golang.org/x/mod v0.32.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/telemetry v0.0.0-20260109210033-bd525da824e2 // indirect
 	golang.org/x/term v0.39.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 	golang.org/x/tools v0.41.0 // indirect

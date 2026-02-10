@@ -820,7 +820,7 @@ func DefaultDetectors() []detectors.Detector {
 		&circleci.Scanner{},
 		&uri.Scanner{},
 		&razorpay.Scanner{},
-		&jdbc.Scanner{},
+		jdbc.New(jdbc.WithIgnorePattern([]string{`\$\{/[^}]+\}`})),
 		&privatekey.Scanner{},
 		&maxmindlicense.Scanner{},
 		&maxmindlicense_v2.Scanner{},

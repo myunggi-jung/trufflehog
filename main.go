@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	//"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -249,7 +250,7 @@ func run(state overseer.State) {
 	s3ScanSessionToken = os.Getenv("AWS_SESSION_TOKEN")
 	roleArns = os.Getenv("AWS_ROLE_ARNS")
 	s3ScanRoleArns = strings.Split(roleArns, ",")
-	slackUrl := getSlackWebhook(s3ScanKey, s3ScanSecret, s3ScanSessionToken)
+	//slackUrl := getSlackWebhook(s3ScanKey, s3ScanSecret, s3ScanSessionToken)
 	teamsUrl := getTeamsWebhook(s3ScanKey, s3ScanSecret, s3ScanSessionToken)
 
 	fmt.Fprintf(os.Stderr, "🐷🔑🐷  TruffleHog. Unearth your secrets. 🐷🔑🐷\n\n")
@@ -303,7 +304,7 @@ func run(state overseer.State) {
 	)
 
 	//slack message
-	sendSlackMessage(slackUrl, fmt.Sprintf("finished scanning \tchunks: %d, bytes: %d, verified_secrets: %d, unverified_secrets: %d, scan_duration: %s", metrics.ChunksScanned, metrics.BytesScanned, metrics.VerifiedSecretsFound, metrics.UnverifiedSecretsFound, metrics.ScanDuration.String()))
+	//sendSlackMessage(slackUrl, fmt.Sprintf("finished scanning \tchunks: %d, bytes: %d, verified_secrets: %d, unverified_secrets: %d, scan_duration: %s", metrics.ChunksScanned, metrics.BytesScanned, metrics.VerifiedSecretsFound, metrics.UnverifiedSecretsFound, metrics.ScanDuration.String()))
 	//teams message
 	sendTeamsMessage(teamsUrl, "S3 secret scanning result", fmt.Sprintf("finished scanning \tchunks: %d, bytes: %d, verified_secrets: %d, unverified_secrets: %d, scan_duration: %s", metrics.ChunksScanned, metrics.BytesScanned, metrics.VerifiedSecretsFound, metrics.UnverifiedSecretsFound, metrics.ScanDuration.String()))
 }

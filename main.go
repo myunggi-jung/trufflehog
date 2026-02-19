@@ -250,8 +250,6 @@ func run(state overseer.State) {
 	s3ScanSessionToken = os.Getenv("AWS_SESSION_TOKEN")
 	roleArns = os.Getenv("AWS_ROLE_ARNS")
 	s3ScanRoleArns = strings.Split(roleArns, ",")
-	//slackUrl := getSlackWebhook(s3ScanKey, s3ScanSecret, s3ScanSessionToken)
-	teamsUrl := getTeamsWebhook(s3ScanKey, s3ScanSecret, s3ScanSessionToken)
 
 	fmt.Fprintf(os.Stderr, "🐷🔑🐷  TruffleHog. Unearth your secrets. 🐷🔑🐷\n\n")
 	//sendSlackMessage(url, "TruffleHog. Unearth your secrets.")
@@ -303,10 +301,11 @@ func run(state overseer.State) {
 		"scan_duration", metrics.ScanDuration.String(),
 	)
 
-	//slack message
-	//sendSlackMessage(slackUrl, fmt.Sprintf("finished scanning \tchunks: %d, bytes: %d, verified_secrets: %d, unverified_secrets: %d, scan_duration: %s", metrics.ChunksScanned, metrics.BytesScanned, metrics.VerifiedSecretsFound, metrics.UnverifiedSecretsFound, metrics.ScanDuration.String()))
-	//teams message
-	sendTeamsMessage(teamsUrl, "S3 secret scanning result", fmt.Sprintf("finished scanning \tchunks: %d, bytes: %d, verified_secrets: %d, unverified_secrets: %d, scan_duration: %s", metrics.ChunksScanned, metrics.BytesScanned, metrics.VerifiedSecretsFound, metrics.UnverifiedSecretsFound, metrics.ScanDuration.String()))
+	teamsUrl := getTeamsWebhook(s3ScanKey, s3ScanSecret, s3ScanSessionToken)
+	for _, result := range metrics.Results {
+		sendTeamsMessageForResult(teamsUrl, &result)
+	}
+	//sendTeamsMessage(teamsUrl, "S3 secret scanning result", fmt.Sprintf("finished scanning \tchunks: %d, bytes: %d, verified_secrets: %d, unverified_secrets: %d, scan_duration: %s", metrics.ChunksScanned, metrics.BytesScanned, metrics.VerifiedSecretsFound, metrics.UnverifiedSecretsFound, metrics.ScanDuration.String()))
 }
 
 func getSlackWebhook(key string, secret string, token string) string {
@@ -351,6 +350,7 @@ func getTeamsWebhook(key string, secret string, token string) string {
 
 	paramName := os.Getenv("TEAMS_INFO")
 	if paramName == "" {
+		//paramName = "workflows-test-channel"
 		paramName = "/security/teams_url"
 	}
 
@@ -376,6 +376,73 @@ func sendSlackMessage(url string, message string) {
 	}
 }
 
+func sendTeamsMessageForResult(url string, r *detectors.ResultWithMetadata) {
+	var facts []map[string]interface{}
+
+	if r.Result.Verified {
+		facts = append(facts, map[string]interface{}{"title": "Status", "value": "✅ Verified"})
+	} else {
+		facts = append(facts, map[string]interface{}{"title": "Status", "value": "❓ Unverified"})
+	}
+
+	facts = append(facts, map[string]interface{}{"title": "Detector Type", "value": r.Result.DetectorType.String()})
+	facts = append(facts, map[string]interface{}{"title": "Decoder Type", "value": r.Result.DecoderType.String()})
+
+	for k, v := range r.Result.ExtraData {
+		facts = append(facts, map[string]interface{}{"title": strings.Title(k), "value": fmt.Sprintf("%v", v)})
+	}
+
+	if r.SourceMetadata != nil {
+		data, _ := json.Marshal(r.SourceMetadata.Data)
+		var meta map[string]map[string]any
+		json.Unmarshal(data, &meta)
+
+		for _, m := range meta {
+			for k, v := range m {
+				facts = append(facts, map[string]interface{}{"title": strings.Title(k), "value": fmt.Sprintf("%v", v)})
+			}
+		}
+	}
+
+	title := "TruffleHog Secret Detection"
+	if r.Result.Verified {
+		title = "🔴 TruffleHog - Verified Secret Found"
+	}
+
+	var factSets []map[string]interface{}
+	for _, fact := range facts {
+		factSets = append(factSets, map[string]interface{}{
+			"type":  "FactSet",
+			"facts": []map[string]interface{}{fact},
+		})
+	}
+
+	payload := map[string]interface{}{
+		"type": "message",
+		"attachments": []map[string]interface{}{
+			{
+				"contentType": "application/vnd.microsoft.card.adaptive",
+				"content": map[string]interface{}{
+					"type": "AdaptiveCard",
+					"body": append([]map[string]interface{}{
+						{"type": "TextBlock", "size": "Medium", "weight": "Bolder", "text": title},
+					}, factSets...),
+					"$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+					"version": "1.2",
+				},
+			},
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	fmt.Printf("Teams payload: %s\n", string(body))
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
+	if err != nil {
+		fmt.Printf("Error sending teams message: %v\n", err)
+	}
+	defer resp.Body.Close()
+}
+
 func sendTeamsMessage(url string, title, text string) {
 	payload := map[string]interface{}{
 		"type": "message",
@@ -396,11 +463,12 @@ func sendTeamsMessage(url string, title, text string) {
 	}
 
 	body, _ := json.Marshal(payload)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
-	if err != nil {
-		fmt.Printf("Error sending teams message: %v\n", err)
-	}
-	defer resp.Body.Close()
+	fmt.Printf("Teams payload: %s\n", string(body))
+	//resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
+	//if err != nil {
+	//	fmt.Printf("Error sending teams message: %v\n", err)
+	//}
+	//defer resp.Body.Close()
 }
 
 // logFatalFunc returns a log.Fatal style function. Calling the returned

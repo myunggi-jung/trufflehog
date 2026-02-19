@@ -59,7 +59,7 @@ func (p *PlainPrinter) Print(_ context.Context, r *detectors.ResultWithMetadata)
 	}
 	printer.Printf("Detector Type: %s\n", out.DetectorType)
 	printer.Printf("Decoder Type: %s\n", out.DecoderType)
-	printer.Printf("Raw result: %s\n", whitePrinter.Sprint(out.Raw))
+	//printer.Printf("Raw result: %s\n", whitePrinter.Sprint(out.Raw))
 
 	for k, v := range r.Result.ExtraData {
 		printer.Printf(

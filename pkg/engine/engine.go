@@ -35,6 +35,7 @@ type Metrics struct {
 
 	scanStartTime time.Time
 	ScanDuration  time.Duration
+	Results       []detectors.ResultWithMetadata
 }
 
 // runtimeMetrics for the scan engine for internal use by the engine.
@@ -594,6 +595,10 @@ func (e *Engine) notifyResults(ctx context.Context) {
 		} else {
 			atomic.AddUint64(&e.metrics.UnverifiedSecretsFound, 1)
 		}
+
+		e.metrics.mu.Lock()
+		e.metrics.Results = append(e.metrics.Results, r)
+		e.metrics.mu.Unlock()
 
 		if err := e.printer.Print(ctx, &r); err != nil {
 			ctx.Logger().Error(err, "error printing result")

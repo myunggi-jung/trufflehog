@@ -8,20 +8,19 @@ import (
 
 	"encoding/json"
 
-	"github.com/aws/aws-lambda-go/lambda"
-	//"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ssm"
-	slackMessage "github.com/slack-go/slack"
-
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/aws/aws-lambda-go/lambda"
+
+	//"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ssm"
 
 	"github.com/go-logr/logr"
 	"github.com/jpillora/overseer"
@@ -237,6 +236,10 @@ func run(state overseer.State) {
 	// Set how the engine will print its results.
 	var printer engine.Printer
 	printer = new(output.PlainPrinter)
+
+	// Get Teams webhook URL before scanning (from current account)
+	teamsUrl := getTeamsWebhook()
+
 	// setup aws
 	s3ScanCloudEnv = false
 	maxObjectSize = os.Getenv("MAX_OBJECT_SIZE")
@@ -252,7 +255,6 @@ func run(state overseer.State) {
 	s3ScanRoleArns = strings.Split(roleArns, ",")
 
 	fmt.Fprintf(os.Stderr, "🐷🔑🐷  TruffleHog. Unearth your secrets. 🐷🔑🐷\n\n")
-	//sendSlackMessage(url, "TruffleHog. Unearth your secrets.")
 
 	e, err := engine.Start(ctx,
 		engine.WithConcurrency(uint8(10)),
@@ -301,79 +303,32 @@ func run(state overseer.State) {
 		"scan_duration", metrics.ScanDuration.String(),
 	)
 
-	teamsUrl := getTeamsWebhook(s3ScanKey, s3ScanSecret, s3ScanSessionToken)
 	for _, result := range metrics.Results {
 		sendTeamsMessageForResult(teamsUrl, &result)
 	}
-	//sendTeamsMessage(teamsUrl, "S3 secret scanning result", fmt.Sprintf("finished scanning \tchunks: %d, bytes: %d, verified_secrets: %d, unverified_secrets: %d, scan_duration: %s", metrics.ChunksScanned, metrics.BytesScanned, metrics.VerifiedSecretsFound, metrics.UnverifiedSecretsFound, metrics.ScanDuration.String()))
 }
 
-func getSlackWebhook(key string, secret string, token string) string {
-	cfg := aws.NewConfig()
-	cfg.Credentials = credentials.NewStaticCredentials(key, secret, token)
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String("ap-northeast-2")},
-	)
-	if err != nil {
-		fmt.Println("Error creating AWS session:", err)
-	}
-
-	svc := ssm.New(sess)
-
-	paramName := os.Getenv("SLACK_INFO")
-	if paramName == "" {
-		paramName = "/trufflehog/slack_url"
-	}
-
-	result, err := svc.GetParameter(&ssm.GetParameterInput{
-		Name:           &paramName,
-		WithDecryption: aws.Bool(true),
-	})
-	if err != nil {
-		fmt.Println("Error getting parameter:", err)
-	}
-
-	return *result.Parameter.Value
-}
-
-func getTeamsWebhook(key string, secret string, token string) string {
-	cfg := aws.NewConfig()
-	cfg.Credentials = credentials.NewStaticCredentials(key, secret, token)
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String("ap-northeast-2")},
-	)
-	if err != nil {
-		fmt.Println("Error creating AWS session:", err)
-	}
-
-	svc := ssm.New(sess)
-
+func getTeamsWebhook() string {
 	paramName := os.Getenv("TEAMS_INFO")
 	if paramName == "" {
-		//paramName = "workflows-test-channel"
 		paramName = "/security/teams_url"
 	}
 
+	sess := session.Must(session.NewSession(&aws.Config{
+		Region: aws.String("ap-northeast-2"),
+	}))
+
+	svc := ssm.New(sess)
 	result, err := svc.GetParameter(&ssm.GetParameterInput{
 		Name:           &paramName,
 		WithDecryption: aws.Bool(true),
 	})
 	if err != nil {
-		fmt.Println("Error getting parameter:", err)
+		fmt.Printf("Error getting Teams webhook from SSM: %v\n", err)
+		return ""
 	}
 
 	return *result.Parameter.Value
-}
-
-func sendSlackMessage(url string, message string) {
-	msg := slackMessage.WebhookMessage{
-		Text: message,
-	}
-
-	err := slackMessage.PostWebhook(url, &msg)
-	if err != nil {
-		fmt.Printf("Error sending slack message: %v\n", err)
-	}
 }
 
 func sendTeamsMessageForResult(url string, r *detectors.ResultWithMetadata) {
